@@ -1,0 +1,11 @@
+diff --git a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala b/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+--- a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
++++ b/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+@@ -671,6 +671,7 @@ class QueryExecution(
+     if (formatted) {
+       try {
+         ExplainUtils.processPlan(executedPlan, append)
++        append("\n")
+       } catch {
+         case e: AnalysisException => append(e.toString)
+         case e: IllegalArgumentException => append(e.toString)
