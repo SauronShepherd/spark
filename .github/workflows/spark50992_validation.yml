@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - SPARK-50992-v7-validation
+  workflow_dispatch:
 
 jobs:
   validate:
@@ -25,10 +26,13 @@ jobs:
           echo '81b40f75178190efc7048342f896f481eff7c22ee0e83a38c9e6f21d233ee795  /tmp/SPARK-50992-v7.patch' | sha256sum -c -
           git apply --check /tmp/SPARK-50992-v7.patch
           git apply /tmp/SPARK-50992-v7.patch
-          grep -n 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+          git diff --check
           test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
           grep -n 'def processPlan\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
           grep -n 'def processPlanBounded\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
+      - name: Compile affected modules
+        run: |
+          ./build/sbt 'catalyst/compile' 'sql/compile'
       - name: Targeted Catalyst tests
         run: |
           ./build/sbt \
@@ -38,5 +42,8 @@ jobs:
         run: |
           ./build/sbt \
             'sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite'
+      - name: Scala style
+        run: |
+          ./build/sbt 'catalyst/scalastyle' 'catalyst/Test/scalastyle' 'sql/scalastyle' 'sql/Test/scalastyle'
       - name: Scala lint
         run: ./dev/lint-scala
