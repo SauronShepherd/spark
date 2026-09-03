@@ -1,0 +1,42 @@
+name: SPARK-50992 validation
+
+on:
+  push:
+    branches:
+      - SPARK-50992-v7-validation
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 1
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: sbt
+      - name: Reconstruct and apply candidate patch
+        shell: bash
+        run: |
+          cat .spark50992/patch.part0 .spark50992/patch.part1 .spark50992/patch.part2 .spark50992/patch.part3 .spark50992/patch.part4 .spark50992/patch.part5 > /tmp/SPARK-50992-v7.patch
+          echo '81b40f75178190efc7048342f896f481eff7c22ee0e83a38c9e6f21d233ee795  /tmp/SPARK-50992-v7.patch' | sha256sum -c -
+          git apply --check /tmp/SPARK-50992-v7.patch
+          git apply /tmp/SPARK-50992-v7.patch
+          grep -n 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+          test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
+          grep -n 'def processPlan\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
+          grep -n 'def processPlanBounded\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
+      - name: Targeted Catalyst tests
+        run: |
+          ./build/sbt \
+            'catalyst/testOnly org.apache.spark.sql.catalyst.util.StringUtilsSuite' \
+            'catalyst/testOnly org.apache.spark.sql.catalyst.trees.TreeNodeSuite'
+      - name: Targeted SQL core tests
+        run: |
+          ./build/sbt \
+            'sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite'
+      - name: Scala lint
+        run: ./dev/lint-scala

@@ -1,0 +1,106 @@
+124,6 @@ object ExplainUtils extends AdaptiveSparkPlanHelper {
+         // than once. So we skip [[ReusedSubqueryExec]] here.
+         if (!sub._3.isInstanceOf[ReusedSubqueryExec]) {
+-          processPlanSkippingSubqueries(sub._3.child, append, collectedOperators)
++          processPlanSkippingSubqueries(sub._3.child, append, collectedOperators, concat)
+         }
+         append("\n")
+       }
+@@ -113,7 +137,8 @@ object ExplainUtils extends AdaptiveSparkPlanHelper {
+         }
+         i = i + 1
+         append(s"Subplan:$i\n")
+-        processPlanSkippingSubqueries[SparkPlan](exchange, append, collectedOperators)
++        processPlanSkippingSubqueries[SparkPlan](
++          exchange, append, collectedOperators, concat)
+         append("\n")
+       }
+     } finally {
+diff --git a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala b/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+--- a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
++++ b/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+@@ -473,28 +473,31 @@ class QueryExecution(
+   }
+ 
+   def simpleString: String = {
+     val concat = new PlanStringConcat()
+-    simpleString(false, SQLConf.get.maxToStringFields, concat.append)
++    simpleString(false, SQLConf.get.maxToStringFields, concat)
+     withRedaction {
+       concat.toString
+     }
+   }
+ 
+   private def simpleString(
+       formatted: Boolean,
+       maxFields: Int,
+-      append: String => Unit): Unit = {
++      concat: PlanStringConcat): Unit = {
++    val append: String => Unit = concat.append
+     append("== Physical Plan ==\n")
+     if (formatted) {
+       try {
+-        ExplainUtils.processPlan(executedPlan, append)
++        // `executedPlan` is evaluated before any bounded rendering starts.
++        val plan = executedPlan
++        ExplainUtils.processPlanBounded(plan, concat)
+       } catch {
+         case e: AnalysisException => append(e.toString)
+         case e: IllegalArgumentException => append(e.toString)
+       }
+     } else {
+-      QueryPlan.append(executedPlan,
+-        append, verbose = false, addSuffix = false, maxFields = maxFields)
++      QueryPlan.appendBounded(executedPlan,
++        concat, verbose = false, addSuffix = false, maxFields = maxFields)
+     }
+     extendedExplainInfo(append, executedPlan)
+     append("\n")
+@@ -501,7 +505,7 @@ class QueryExecution(
+ 
+   def explainString(mode: ExplainMode): String = {
+     val concat = new PlanStringConcat()
+-    explainString(mode, SQLConf.get.maxToStringFields, concat.append)
++    explainString(mode, SQLConf.get.maxToStringFields, concat)
+     withRedaction {
+       concat.toString
+     }
+@@ -528,31 +532,34 @@ class QueryExecution(
+     this
+   }
+ 
+-  private def explainString(mode: ExplainMode, maxFields: Int, append: String => Unit): Unit = {
++  private def explainString(mode: ExplainMode, maxFields: Int, concat: PlanStringConcat): Unit = {
+     val queryExecution = queryExecutionForExplain
++    val append: String => Unit = concat.append
+ 
+     mode match {
+       case SimpleMode =>
+-        queryExecution.simpleString(false, maxFields, append)
++        queryExecution.simpleString(false, maxFields, concat)
+       case ExtendedMode =>
+-        queryExecution.toString(maxFields, append)
++        queryExecution.toString(maxFields, concat)
+       case CodegenMode =>
+         try {
++          // Keep codegen generation semantics unchanged. This patch targets plan-tree rendering.
+           org.apache.spark.sql.execution.debug.writeCodegen(append, queryExecution.executedPlan)
+         } catch {
+           case e: AnalysisException => append(e.toString)
+         }
+       case CostMode =>
+-        queryExecution.stringWithStats(maxFields, append)
++        queryExecution.stringWithStats(maxFields, concat)
+       case FormattedMode =>
+-        queryExecution.simpleString(formatted = true, maxFields = maxFields, append)
++        queryExecution.simpleString(formatted = true, maxFields = maxFields, concat = concat)
+     }
+   }
+ 
+-  private def writePlans(append: String => Unit, maxFields: Int): Unit = {
++  private def writePlans(concat: PlanStringConcat, maxFields: Int): Unit = {
+     val (verbose, addSuffix) = (true, false)
++    val append: String => Unit = concat.append
+     append("== Parsed Logical Plan ==\n")
+-    QueryPlan.append(logical, append, verbose, addSuffix, maxFields)
++    QueryPlan.appendBounded(logical, concat, verbose, addSu

@@ -1,0 +1,108 @@
+before entering the bounded traversal so truncation never changes query
++      // analysis/planning semantics.
++      val evaluatedPlan = plan
++      concat.withEarlyStop { append =>
++        evaluatedPlan.treeString(
++          append, verbose, addSuffix, maxFields, printOperatorId, printOutputColumns)
++      }
++    } catch {
++      case e: AnalysisException => concat.append(e.toString)
++    }
++  }
++
+   /**
+    * Generate detailed field string with different format based on type of input value. Supported
+    * input values are sequences and strings. An empty sequences converts to []. A non-empty
+diff --git a/sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala b/sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
+--- a/sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
++++ b/sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
+@@ -24,6 +24,7 @@ import scala.collection.mutable.{ArrayBuffer, BitSet}
+ import org.apache.spark.sql.AnalysisException
+ import org.apache.spark.sql.catalyst.expressions.{Expression, PlanExpression}
+ import org.apache.spark.sql.catalyst.plans.QueryPlan
++import org.apache.spark.sql.catalyst.util.StringUtils.PlanStringConcat
+ import org.apache.spark.sql.execution.adaptive.{AdaptiveSparkPlanExec, AdaptiveSparkPlanHelper, QueryStageExec}
+ import org.apache.spark.sql.execution.exchange.{Exchange, ReusedExchangeExec}
+ 
+@@ -43,22 +44,40 @@ object ExplainUtils extends AdaptiveSparkPlanHelper {
+   private def processPlanSkippingSubqueries[T <: QueryPlan[T]](
+       plan: T,
+       append: String => Unit,
+-      collectedOperators: BitSet): Unit = {
++      collectedOperators: BitSet,
++      concat: Option[PlanStringConcat]): Unit = {
+     try {
+       generateWholeStageCodegenIds(plan)
+ 
+-      QueryPlan.append(
+-        plan,
+-        append,
+-        verbose = false,
+-        addSuffix = false,
+-        printOperatorId = true)
++      concat match {
++        case Some(c) =>
++          QueryPlan.appendBounded(
++            plan,
++            c,
++            verbose = false,
++            addSuffix = false,
++            printOperatorId = true)
++        case None =>
++          QueryPlan.append(
++            plan,
++            append,
++            verbose = false,
++            addSuffix = false,
++            printOperatorId = true)
++      }
+ 
+       append("\n")
+ 
+       val operationsWithID = ArrayBuffer.empty[QueryPlan[_]]
+       collectOperatorsWithID(plan, operationsWithID, collectedOperators)
+-      operationsWithID.foreach(p => append(p.verboseStringWithOperatorId()))
++      concat match {
++        case Some(c) =>
++          c.withEarlyStop { limitedAppend =>
++            operationsWithID.foreach(p => limitedAppend(p.verboseStringWithOperatorId()))
++          }
++        case None =>
++          operationsWithID.foreach(p => append(p.verboseStringWithOperatorId()))
++      }
+ 
+     } catch {
+       case e: AnalysisException => append(e.toString)
+@@ -72,7 +83,22 @@ object ExplainUtils extends AdaptiveSparkPlanHelper {
+    * instances but cached plan is an exception. The `InMemoryRelation#innerChildren` use a shared
+    * plan instance across multi-queries. Add lock for this method to avoid tag race condition.
+    */
+   def processPlan[T <: QueryPlan[T]](plan: T, append: String => Unit): Unit = {
++    processPlanInternal(plan, append, None)
++  }
++
++  /**
++   * Same formatted explain processing as [[processPlan]], but bounds only the string-producing
++   * tree/detail rendering steps. Operator-id assignment and other explain preparation still run.
++   */
++  private[sql] def processPlanBounded[T <: QueryPlan[T]](
++      plan: T,
++      concat: PlanStringConcat): Unit = {
++    processPlanInternal(plan, concat.append, Some(concat))
++  }
++
++  private def processPlanInternal[T <: QueryPlan[T]](
++      plan: T, append: String => Unit, concat: Option[PlanStringConcat]): Unit = {
+     val prevIdMap = localIdMap.get()
+     try {
+       // Initialize a reference-unique id map to store generated ids, which also avoid accidental
+@@ -84,7 +108,7 @@ object ExplainUtils extends AdaptiveSparkPlanHelper {
+       val (subqueries, optimizedOutExchanges) = assignOperatorIds(plan, idMap)
+ 
+       val collectedOperators = BitSet.empty
+-      processPlanSkippingSubqueries(plan, append, collectedOperators)
++      processPlanSkippingSubqueries(plan, append, collectedOperators, concat)
+ 
+       var i = 0
+       for (sub <- subqueries) {
+@@ -100,6 +

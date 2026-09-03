@@ -1,0 +1,94 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Angel Alvarez Pascua <angel.alvarez.pascua@gmail.com>
+Date: Thu, 3 Sep 2026 18:00:00 +0200
+Subject: [PATCH] [SQL] Stop rendering plan trees once maxPlanStringLength is reached
+
+### What changes were proposed in this pull request?
+
+Make `spark.sql.maxPlanStringLength` stop plan-tree rendering once the configured
+limit has been filled, rather than continuing to render every remaining node and
+discarding the resulting text.
+
+`PlanStringConcat` gains a scoped `withEarlyStop` helper. Bounded rendering is
+kept local to individual tree/detail rendering operations (`TreeNode.treeString`,
+`QueryPlan.appendBounded`, and formatted explain rendering). It is deliberately
+not wrapped around an entire `QueryExecution.explainString` or
+`ExplainUtils.processPlan` call: analysis, optimization, physical planning,
+statistics, and other explain work must keep their existing execution semantics
+even when the output limit is zero.
+
+Because an abandoned tree traversal no longer knows the full untruncated string
+length, early-stopped output uses `... more characters` (or `Truncated plan of
+unknown length` at a zero limit). Direct `PlanStringConcat.append` callers still
+run to completion and keep the exact character-count message.
+
+### Why are the changes needed?
+
+`StringConcat.append` already stops retaining text after
+`spark.sql.maxPlanStringLength`, but `TreeNode.generateTreeString` continues
+walking the tree and materializing every node string. On very large plans this
+means the configuration bounds retained string memory without bounding the CPU
+spent producing text that is immediately discarded.
+
+SPARK-59023 lets users opt out of SQL UI plan descriptions entirely with
+`spark.sql.ui.explainMode=none`. This change is complementary for callers that
+still request bounded plan text. It targets plan-tree string rendering only; it
+does not claim to bound unrelated work such as cost-statistics computation,
+operator-id assignment, codegen discovery, or `SparkPlanInfo` construction.
+
+### Does this PR introduce _any_ user-facing change?
+
+Only for plan strings that are already truncated: when the tree walk is stopped
+early, Spark can no longer report the exact number of characters that were not
+rendered.
+
+### How was this patch tested?
+
+* Added `PlanStringConcat` tests for early stop and a zero-length limit.
+* Added a `TreeNodeSuite` test proving that nodes after the limit are not
+  rendered.
+* Added `QueryExecutionSuite` coverage proving that a zero output limit does not
+  skip physical planning for simple or extended explain paths.
+* Existing SPARK-31916 direct-append tests continue to require the exact
+  truncation count.
+
+### Was this patch authored or co-authored using generative AI tooling?
+
+Generated-by: Claude Opus 5 (initial draft)
+Generated-by: ChatGPT (GPT-5.6 Sol) (redesign)
+---
+ 8 files changed, 242 insertions(+), 42 deletions(-)
+
+diff --git a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/StringUtils.scala b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/StringUtils.scala
+--- a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/StringUtils.scala
++++ b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/StringUtils.scala
+@@ -21,6 +21,7 @@ import java.util.Locale
+ import java.util.regex.{Pattern, PatternSyntaxException}
+ 
+ import scala.collection.mutable.ArrayBuffer
++import scala.util.control.ControlThrowable
+ 
+ import org.apache.commons.text.similarity.LevenshteinDistance
+ 
+@@ -126,20 +127,57 @@ object StringUtils extends Logging {
+     funcNames.toSeq
+   }
+ 
++  /** Used internally to terminate one bounded plan-tree rendering operation. */
++  private[sql] class PlanStringLimitReached extends ControlThrowable
++
+   /**
+    * A string concatenator for plan strings.  Uses length from a configured value, and
+    *  prints a warning the first time a plan is truncated.
+    */
+   class PlanStringConcat extends StringConcat(Math.max(0, SQLConf.get.maxPlanStringLength - 30)) {
++
++    // Once a tree traversal is abandoned, `length` is no longer the full untruncated length.
++    private var stoppedEarly = false
++
++    /**
++     * Runs exactly one plan rendering operation with an append function that stops the rendering
++     * as soon as this sink is full. Keep the catch here so the control flow cannot accidentally
++     * abort analysis, optimization, planning, or a surrounding explain operation.
++     */
++    privat

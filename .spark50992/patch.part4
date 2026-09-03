@@ -1,0 +1,106 @@
+ffix, maxFields)
+     append("\n== Analyzed Logical Plan ==\n")
+     try {
+       if (analyzed.output.nonEmpty) {
+@@ -563,11 +568,11 @@ class QueryExecution(
+         )
+         append("\n")
+       }
+-      QueryPlan.append(analyzed, append, verbose, addSuffix, maxFields)
++      QueryPlan.appendBounded(analyzed, concat, verbose, addSuffix, maxFields)
+       append("\n== Optimized Logical Plan ==\n")
+-      QueryPlan.append(optimizedPlan, append, verbose, addSuffix, maxFields)
++      QueryPlan.appendBounded(optimizedPlan, concat, verbose, addSuffix, maxFields)
+       append("\n== Physical Plan ==\n")
+-      QueryPlan.append(executedPlan, append, verbose, addSuffix, maxFields)
++      QueryPlan.appendBounded(executedPlan, concat, verbose, addSuffix, maxFields)
+       extendedExplainInfo(append, executedPlan)
+     } catch {
+       case e: AnalysisException => append(e.toString)
+@@ -596,25 +601,26 @@ class QueryExecution(
+ 
+   override def toString: String = withRedaction {
+     val concat = new PlanStringConcat()
+-    toString(SQLConf.get.maxToStringFields, concat.append)
++    toString(SQLConf.get.maxToStringFields, concat)
+     withRedaction {
+       concat.toString
+     }
+   }
+ 
+-  private def toString(maxFields: Int, append: String => Unit): Unit = {
+-    writePlans(append, maxFields)
++  private def toString(maxFields: Int, concat: PlanStringConcat): Unit = {
++    writePlans(concat, maxFields)
+   }
+ 
+   def stringWithStats: String = {
+     val concat = new PlanStringConcat()
+-    stringWithStats(SQLConf.get.maxToStringFields, concat.append)
++    stringWithStats(SQLConf.get.maxToStringFields, concat)
+     withRedaction {
+       concat.toString
+     }
+   }
+ 
+-  private def stringWithStats(maxFields: Int, append: String => Unit): Unit = {
++  private def stringWithStats(maxFields: Int, concat: PlanStringConcat): Unit = {
++    val append: String => Unit = concat.append
+     // trigger to compute stats for logical plans
+     try {
+       // This will trigger to compute stats for all the nodes in the plan, including subqueries,
+@@ -626,9 +631,11 @@ class QueryExecution(
+     }
+     // only show optimized logical plan and physical plan
+     append("== Optimized Logical Plan ==\n")
+-    QueryPlan.append(optimizedPlan, append, verbose = true, addSuffix = true, maxFields)
++    QueryPlan.appendBounded(
++      optimizedPlan, concat, verbose = true, addSuffix = true, maxFields = maxFields)
+     append("\n== Physical Plan ==\n")
+-    QueryPlan.append(executedPlan, append, verbose = true, addSuffix = false, maxFields)
++    QueryPlan.appendBounded(
++      executedPlan, concat, verbose = true, addSuffix = false, maxFields = maxFields)
+     append("\n")
+   }
+ 
+diff --git a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/util/StringUtilsSuite.scala b/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/util/StringUtilsSuite.scala
+--- a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/util/StringUtilsSuite.scala
++++ b/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/util/StringUtilsSuite.scala
+@@ -135,6 +135,36 @@ class StringUtilsSuite extends SparkFunSuite with SQLHelper {
+     }
+   }
+ 
++  test("bounded plan rendering abandons traversal once the limit is reached") {
++    withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "40") {
++      var fragmentsRendered = 0
++      val concat = new PlanStringConcat()
++      concat.withEarlyStop { append =>
++        (0 until 1000).foreach { i =>
++          fragmentsRendered += 1
++          append(s"plan fragment $i")
++        }
++      }
++      assert(fragmentsRendered === 2)
++      assert(concat.toString === "plan fragm... more characters")
++    }
++  }
++
++  test("bounded plan rendering reports unknown length when the limit is zero") {
++    withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "0") {
++      var fragmentsRendered = 0
++      val concat = new PlanStringConcat()
++      concat.withEarlyStop { append =>
++        (0 until 1000).foreach { i =>
++          fragmentsRendered += 1
++          append(s"plan fragment $i")
++        }
++      }
++      assert(fragmentsRendered === 1)
++      assert(concat.toString === "Truncated plan of unknown length")
++    }
++  }
++
+   test("SPARK-43841: mix of multipart and single-part identifiers") {
+     val baseString = "b"
+     // mix of multipart and single-part
+diff --git a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/trees/TreeNodeSuite.scala b/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/trees/TreeNodeSuite.s

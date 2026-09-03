@@ -1,0 +1,88 @@
+e[sql] def withEarlyStop(render: (String => Unit) => Unit): Unit = {
++      val appendUntilFull: String => Unit = s => {
++        if (s != null && s.nonEmpty && atLimit) {
++          stoppedEarly = true
++          throw new PlanStringLimitReached
++        }
++        append(s)
++      }
++      try {
++        render(appendUntilFull)
++      } catch {
++        case _: PlanStringLimitReached => // The retained prefix is complete.
++      }
++    }
++
+     override def toString: String = {
+       if (atLimit) {
+-        logWarning(
+-          log"Truncated the string representation of a plan since it was too long. The " +
+-            log"plan had length ${MDC(QUERY_PLAN_LENGTH_ACTUAL, length)} " +
+-            log"and the maximum is ${MDC(QUERY_PLAN_LENGTH_MAX, maxLength)}. This behavior " +
+-            log"can be adjusted by setting " +
+-            log"'${MDC(CONFIG, SQLConf.MAX_PLAN_STRING_LENGTH.key)}'.")
+-        val truncateMsg = if (maxLength == 0) {
++        if (stoppedEarly) {
++          logWarning(
++            log"Truncated the string representation of a plan since it was too long. The " +
++              log"maximum is ${MDC(QUERY_PLAN_LENGTH_MAX, maxLength)} and the rest of the plan " +
++              log"was not rendered, so its full length is unknown. This behavior can be " +
++              log"adjusted by setting '${MDC(CONFIG, SQLConf.MAX_PLAN_STRING_LENGTH.key)}'.")
++        } else {
++          logWarning(
++            log"Truncated the string representation of a plan since it was too long. The " +
++              log"plan had length ${MDC(QUERY_PLAN_LENGTH_ACTUAL, length)} " +
++              log"and the maximum is ${MDC(QUERY_PLAN_LENGTH_MAX, maxLength)}. This behavior " +
++              log"can be adjusted by setting " +
++              log"'${MDC(CONFIG, SQLConf.MAX_PLAN_STRING_LENGTH.key)}'.")
++        }
++        val truncateMsg = if (stoppedEarly) {
++          if (maxLength == 0) "Truncated plan of unknown length" else "... more characters"
++        } else if (maxLength == 0) {
+           s"Truncated plan of $length characters"
+         } else {
+           s"... ${length - maxLength} more characters"
+diff --git a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/trees/TreeNode.scala b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/trees/TreeNode.scala
+--- a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/trees/TreeNode.scala
++++ b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/trees/TreeNode.scala
+@@ -1001,9 +1001,11 @@ abstract class TreeNode[BaseType <: TreeNode[BaseType]]
+       maxFields: Int = SQLConf.get.maxToStringFields,
+       printOperatorId: Boolean = false,
+       printOutputColumns: Boolean = false): String = {
+     val concat = new PlanStringConcat()
+-    treeString(concat.append, verbose, addSuffix, maxFields, printOperatorId, printOutputColumns)
++    concat.withEarlyStop { append =>
++      treeString(append, verbose, addSuffix, maxFields, printOperatorId, printOutputColumns)
++    }
+     concat.toString
+   }
+ 
+   def treeString(
+diff --git a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/QueryPlan.scala b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/QueryPlan.scala
+--- a/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/QueryPlan.scala
++++ b/sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/QueryPlan.scala
+@@ -36,5 +36,6 @@ import org.apache.spark.sql.catalyst.trees.TreePatternBits
+ import org.apache.spark.sql.catalyst.trees.TreePatternBits.toPatternBits
+ import org.apache.spark.sql.catalyst.types.DataTypeUtils
++import org.apache.spark.sql.catalyst.util.StringUtils.PlanStringConcat
+ import org.apache.spark.sql.internal.SQLConf
+ import org.apache.spark.sql.types.{DataType, StructType}
+ import org.apache.spark.util.{BestEffortLazyVal, TransientBestEffortLazyVal}
+@@ -895,6 +896,31 @@ object QueryPlan extends SQLConfHelper {
+     }
+   }
+ 
++  /**
++   * Converts the query plan to a bounded string sink. The by-name `plan` is still evaluated even
++   * when the sink is already full; only the subsequent tree-string traversal is abandoned.
++   */
++  private[sql] def appendBounded[T <: QueryPlan[T]](
++      plan: => QueryPlan[T],
++      concat: PlanStringConcat,
++      verbose: Boolean,
++      addSuffix: Boolean,
++      maxFields: Int = SQLConf.get.maxToStringFields,
++      printOperatorId: Boolean = false,
++      printOutputColumns: Boolean = false): Unit = {
++    try {
++      // Evaluate the plan 

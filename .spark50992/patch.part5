@@ -1,0 +1,89 @@
+cala
+--- a/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/trees/TreeNodeSuite.scala
++++ b/sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/trees/TreeNodeSuite.scala
+@@ -52,6 +52,23 @@ case class Dummy(optKey: Option[Expression]) extends Expression with CodegenFall
+     copy(optKey = if (optKey.isDefined) Some(newChildren(0)) else None)
+ }
+ 
++case class CountingDummy(child: Expression) extends UnaryExpression with CodegenFallback {
++  override def nullable: Boolean = true
++  override def dataType: NullType = NullType
++  override lazy val resolved = true
++  override def eval(input: InternalRow): Any = null.asInstanceOf[Any]
++  override def simpleString(maxFields: Int): String = {
++    CountingDummy.rendered.incrementAndGet()
++    "CountingDummy"
++  }
++  override protected def withNewChildInternal(newChild: Expression): Expression =
++    copy(child = newChild)
++}
++
++object CountingDummy {
++  val rendered = new java.util.concurrent.atomic.AtomicInteger(0)
++}
++
+ case class ComplexPlan(exprs: Seq[Seq[Expression]])
+   extends org.apache.spark.sql.catalyst.plans.logical.LeafNode {
+   override def output: Seq[Attribute] = Nil
+@@ -753,6 +770,23 @@ class TreeNodeSuite extends SparkFunSuite with SQLHelper {
+     }
+   }
+ 
++  test("treeString stops rendering nodes once the plan length limit is reached") {
++    withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "200") {
++      val depth = 500
++      val tree = (1 until depth).foldLeft(Literal("TestLiteral"): Expression) {
++        case (child, _) => CountingDummy(child)
++      }
++
++      CountingDummy.rendered.set(0)
++      val planString = tree.treeString
++
++      assert(planString.endsWith(" more characters"))
++      assert(planString.length <= SQLConf.get.maxPlanStringLength)
++      assert(CountingDummy.rendered.get() < depth / 10,
++        s"rendered ${CountingDummy.rendered.get()} of $depth nodes past the length limit")
++    }
++  }
++
+   test("treeString limit at zero") {
+     withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "0") {
+       val ds = (1 until 2).foldLeft(Literal("TestLiteral"): Expression) { case (treeNode, x) =>
+diff --git a/sql/core/src/test/scala/org/apache/spark/sql/execution/QueryExecutionSuite.scala b/sql/core/src/test/scala/org/apache/spark/sql/execution/QueryExecutionSuite.scala
+--- a/sql/core/src/test/scala/org/apache/spark/sql/execution/QueryExecutionSuite.scala
++++ b/sql/core/src/test/scala/org/apache/spark/sql/execution/QueryExecutionSuite.scala
+@@ -669,6 +669,32 @@ class QueryExecutionSuite extends SharedSparkSession {
+     }
+   }
+ 
++  test("plan string truncation does not skip query planning") {
++    def assertPlanningStillRuns(render: QueryExecution => String): Unit = {
++      val tracker = new QueryPlanningTracker
++      val qe = new QueryExecution(spark, OneRowRelation(), tracker)
++      withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "0") {
++        assert(render(qe).startsWith("Truncated plan of"))
++      }
++      assert(tracker.phases.keySet.contains(QueryPlanningTracker.PLANNING))
++    }
++
++    // These two paths would return immediately before touching `executedPlan` if the early-stop
++    // exception were scoped around the whole QueryExecution rendering operation.
++    assertPlanningStillRuns(_.simpleString)
++    assertPlanningStillRuns(_.explainString(ExtendedMode))
++  }
++
++  test("plan string truncation does not skip analysis errors") {
++    val df = Seq(("dotNET", 2012, 10000)).toDF("course", "year", "earnings")
++    val invalid = df.agg(org.apache.spark.sql.functions.grouping("course"))
++    withSQLConf(SQLConf.MAX_PLAN_STRING_LENGTH.key -> "0") {
++      intercept[AnalysisException] {
++        invalid.explain()
++      }
++    }
++  }
++
+   case class MockCallbackEagerCommand(
+       var trackerAnalyzed: QueryPlanningTracker = null,
+       var trackerReadyForExecution: QueryPlanningTracker = null)
+-- 
+2.43.0
