@@ -36,7 +36,26 @@ jobs:
           test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
 
       - name: Compile catalyst and SQL tests
-        run: ./build/sbt -Phadoop-3 "catalyst/Test/compile" "sql/Test/compile"
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/Test/compile" "sql/Test/compile" 2>&1 | tee /tmp/compile.log
+
+      - name: Upload compile log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark50992-compile-log
+          path: /tmp/compile.log
+
+      - name: Print compile failure excerpt
+        if: failure()
+        shell: bash
+        run: |
+          echo '--- compiler errors ---'
+          grep -nE '\[error\]|error:|\.scala:[0-9]+:' /tmp/compile.log | tail -n 200 || true
+          echo '--- tail ---'
+          tail -n 250 /tmp/compile.log || true
 
       - name: Run targeted regression suites
         run: |
