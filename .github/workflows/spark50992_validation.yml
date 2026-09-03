@@ -19,24 +19,41 @@ jobs:
           distribution: temurin
           java-version: '17'
           cache: sbt
-      - name: Reconstruct and apply candidate patch
+      - name: Reconstruct and apply canonical candidate
         shell: bash
         run: |
+          set -euo pipefail
           cat .spark50992/patch.part0 .spark50992/patch.part1 .spark50992/patch.part2 .spark50992/patch.part3 .spark50992/patch.part4 .spark50992/patch.part5 > /tmp/SPARK-50992-v7.patch
           echo '81b40f75178190efc7048342f896f481eff7c22ee0e83a38c9e6f21d233ee795  /tmp/SPARK-50992-v7.patch' | sha256sum -c -
           echo '9304772907b17d6ed82b3d387e7f96d97f773b44b64f06ad0f11d7af761a67d4  .spark50992/writer-fix.patch' | sha256sum -c -
+          echo '6b318c06e6db47266d1d1b38873e293696033b0179b687b1bc6b1bb10d81c543  .spark50992/formatted-newline-fix.patch' | sha256sum -c -
           git apply --check /tmp/SPARK-50992-v7.patch
           git apply /tmp/SPARK-50992-v7.patch
           git apply --check .spark50992/writer-fix.patch
           git apply .spark50992/writer-fix.patch
+          git apply --check .spark50992/formatted-newline-fix.patch
+          git apply .spark50992/formatted-newline-fix.patch
           git diff --check
           test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
           grep -n 'val append: String => Unit = writer.write' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
           grep -n 'def processPlan\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
           grep -n 'def processPlanBounded\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
-      - name: Compile affected modules
+          git diff --binary -- \
+            sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/util/StringUtils.scala \
+            sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/trees/TreeNode.scala \
+            sql/catalyst/src/main/scala/org/apache/spark/sql/catalyst/plans/QueryPlan.scala \
+            sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala \
+            sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala \
+            sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/util/StringUtilsSuite.scala \
+            sql/catalyst/src/test/scala/org/apache/spark/sql/catalyst/trees/TreeNodeSuite.scala \
+            sql/core/src/test/scala/org/apache/spark/sql/execution/QueryExecutionSuite.scala \
+            > /tmp/SPARK-50992-v8-canonical.diff
+          echo "CANONICAL_SHA256=$(sha256sum /tmp/SPARK-50992-v8-canonical.diff | awk '{print $1}')" | tee /tmp/canonical-sha256.txt
+      - name: Compile affected modules and tests
         run: |
-          ./build/sbt 'catalyst/compile' 'sql/compile'
+          ./build/sbt \
+            'catalyst/compile' 'catalyst/Test/compile' \
+            'sql/compile' 'sql/Test/compile'
       - name: Targeted Catalyst tests
         run: |
           ./build/sbt \
@@ -56,3 +73,13 @@ jobs:
           ./build/sbt 'catalyst/scalastyle' 'catalyst/Test/scalastyle' 'sql/scalastyle' 'sql/Test/scalastyle'
       - name: Scala lint
         run: ./dev/lint-scala
+      - name: Upload canonical candidate
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: SPARK-50992-v8-canonical
+          path: |
+            /tmp/SPARK-50992-v8-canonical.diff
+            /tmp/canonical-sha256.txt
+          if-no-files-found: error
+          retention-days: 7
