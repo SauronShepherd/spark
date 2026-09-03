@@ -1,0 +1,106 @@
+diff --git a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala b/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+--- a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
++++ b/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+@@ -641,6 +641,92 @@ class QueryExecution(
+     append("\n")
+   }
+ 
++  /**
++   * Generates explain output for debug.toFile without applying MAX_PLAN_STRING_LENGTH.
++   * This preserves the existing streaming-to-writer behavior of the debug file API.
++   */
++  private def explainStringUnbounded(
++      mode: ExplainMode,
++      maxFields: Int,
++      append: String => Unit): Unit = {
++    val queryExecution = queryExecutionForExplain
++
++    mode match {
++      case SimpleMode =>
++        queryExecution.simpleStringUnbounded(formatted = false, maxFields, append)
++      case ExtendedMode =>
++        queryExecution.writePlansUnbounded(append, maxFields)
++      case CodegenMode =>
++        try {
++          org.apache.spark.sql.execution.debug.writeCodegen(append, queryExecution.executedPlan)
++        } catch {
++          case e: AnalysisException => append(e.toString)
++        }
++      case CostMode =>
++        queryExecution.stringWithStatsUnbounded(maxFields, append)
++      case FormattedMode =>
++        queryExecution.simpleStringUnbounded(formatted = true, maxFields, append)
++    }
++  }
++
++  private def simpleStringUnbounded(
++      formatted: Boolean,
++      maxFields: Int,
++      append: String => Unit): Unit = {
++    append("== Physical Plan ==\n")
++    if (formatted) {
++      try {
++        ExplainUtils.processPlan(executedPlan, append)
++      } catch {
++        case e: AnalysisException => append(e.toString)
++        case e: IllegalArgumentException => append(e.toString)
++      }
++    } else {
++      QueryPlan.append(
++        executedPlan, append, verbose = false, addSuffix = false, maxFields = maxFields)
++    }
++    extendedExplainInfo(append, executedPlan)
++    append("\n")
++  }
++
++  private def writePlansUnbounded(append: String => Unit, maxFields: Int): Unit = {
++    val (verbose, addSuffix) = (true, false)
++    append("== Parsed Logical Plan ==\n")
++    QueryPlan.append(logical, append, verbose, addSuffix, maxFields)
++    append("\n== Analyzed Logical Plan ==\n")
++    try {
++      if (analyzed.output.nonEmpty) {
++        append(
++          truncatedString(
++            analyzed.output.map(o => s"${o.name}: ${o.dataType.simpleString}"), ", ", maxFields))
++        append("\n")
++      }
++      QueryPlan.append(analyzed, append, verbose, addSuffix, maxFields)
++      append("\n== Optimized Logical Plan ==\n")
++      QueryPlan.append(optimizedPlan, append, verbose, addSuffix, maxFields)
++      append("\n== Physical Plan ==\n")
++      QueryPlan.append(executedPlan, append, verbose, addSuffix, maxFields)
++      extendedExplainInfo(append, executedPlan)
++    } catch {
++      case e: AnalysisException => append(e.toString)
++    }
++  }
++
++  private def stringWithStatsUnbounded(maxFields: Int, append: String => Unit): Unit = {
++    try {
++      optimizedPlan.collectWithSubqueries {
++        case plan => plan.stats
++      }
++    } catch {
++      case e: AnalysisException => append(e.toString + "\n")
++    }
++    append("== Optimized Logical Plan ==\n")
++    QueryPlan.append(optimizedPlan, append, verbose = true, addSuffix = true, maxFields)
++    append("\n== Physical Plan ==\n")
++    QueryPlan.append(executedPlan, append, verbose = true, addSuffix = false, maxFields)
++    append("\n")
++  }
++
+   /**
+    * Redact the sensitive information in the given string.
+    */
+@@ -730,7 +816,8 @@ class QueryExecution(
+       val writer = new BufferedWriter(new OutputStreamWriter(fs.create(filePath)))
+       try {
+         val mode = explainMode.map(ExplainMode.fromString(_)).getOrElse(ExtendedMode)
+-        explainString(mode, maxFields, writer.write)
++        val append: String => Unit = writer.write
++        explainStringUnbounded(mode, maxFields, append)
+         if (mode != CodegenMode) {
+           writer.write("\n== Whole Stage Codegen ==\n")
+           org.apache.spark.sql.execution.debug.writeCodegen(writer.write, executedPlan)
