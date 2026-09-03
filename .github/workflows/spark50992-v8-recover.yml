@@ -1,0 +1,47 @@
+name: SPARK-50992 v8 recover exact v7
+
+on:
+  push:
+    branches:
+      - SPARK-50992-ci-validation-v8
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  recover:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Reconstruct exact v7 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          OLD_VALIDATION=bed27d3c6500fe7f17454152451115abcd654de9
+          EXPECTED=81b40f75178190efc7048342f896f481eff7c22ee0e83a38c9e6f21d233ee795
+          git fetch --no-tags origin "$OLD_VALIDATION"
+          git show "$OLD_VALIDATION:.github/spark50992/gz-00" > /tmp/gz-00
+          git show "$OLD_VALIDATION:.github/spark50992/gz-01" > /tmp/gz-01
+          git show "$OLD_VALIDATION:.github/spark50992/gz-02" > /tmp/gz-02
+          cat /tmp/gz-00 /tmp/gz-01 /tmp/gz-02 | gunzip > /tmp/SPARK-50992-early-exit-v7.patch
+          ACTUAL=$(sha256sum /tmp/SPARK-50992-early-exit-v7.patch | awk '{print $1}')
+          echo "v7 sha256=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+          git apply --check /tmp/SPARK-50992-early-exit-v7.patch
+          git apply /tmp/SPARK-50992-early-exit-v7.patch
+          git diff --check
+          cp sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala /tmp/QueryExecution-v7.scala
+
+      - name: Upload exact recovery inputs
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark50992-v8-recovery
+          if-no-files-found: error
+          path: |
+            /tmp/SPARK-50992-early-exit-v7.patch
+            /tmp/QueryExecution-v7.scala
+          retention-days: 7
