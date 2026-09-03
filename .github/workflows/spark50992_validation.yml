@@ -24,10 +24,14 @@ jobs:
         run: |
           cat .spark50992/patch.part0 .spark50992/patch.part1 .spark50992/patch.part2 .spark50992/patch.part3 .spark50992/patch.part4 .spark50992/patch.part5 > /tmp/SPARK-50992-v7.patch
           echo '81b40f75178190efc7048342f896f481eff7c22ee0e83a38c9e6f21d233ee795  /tmp/SPARK-50992-v7.patch' | sha256sum -c -
+          echo '51ac1cd829c2d6bfe0f3882f0c1deb5e4a344489f6ad6ba3be07075d9db8a6b2  .spark50992/writer-fix.patch' | sha256sum -c -
           git apply --check /tmp/SPARK-50992-v7.patch
           git apply /tmp/SPARK-50992-v7.patch
+          git apply --check .spark50992/writer-fix.patch
+          git apply .spark50992/writer-fix.patch
           git diff --check
           test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
+          grep -n 'val append: String => Unit = writer.write' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
           grep -n 'def processPlan\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
           grep -n 'def processPlanBounded\[' sql/core/src/main/scala/org/apache/spark/sql/execution/ExplainUtils.scala
       - name: Compile affected modules
@@ -38,10 +42,15 @@ jobs:
           ./build/sbt \
             'catalyst/testOnly org.apache.spark.sql.catalyst.util.StringUtilsSuite' \
             'catalyst/testOnly org.apache.spark.sql.catalyst.trees.TreeNodeSuite'
-      - name: Targeted SQL core tests
+      - name: Query execution regression tests
         run: |
           ./build/sbt \
             'sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite'
+      - name: Explain compatibility tests
+        run: |
+          ./build/sbt \
+            'sql/testOnly org.apache.spark.sql.ExplainSuite' \
+            'sql/testOnly org.apache.spark.sql.execution.ExplainUtilsSuite'
       - name: Scala style
         run: |
           ./build/sbt 'catalyst/scalastyle' 'catalyst/Test/scalastyle' 'sql/scalastyle' 'sql/Test/scalastyle'
