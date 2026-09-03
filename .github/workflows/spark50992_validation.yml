@@ -24,7 +24,7 @@ jobs:
         run: |
           cat .spark50992/patch.part0 .spark50992/patch.part1 .spark50992/patch.part2 .spark50992/patch.part3 .spark50992/patch.part4 .spark50992/patch.part5 > /tmp/SPARK-50992-v7.patch
           echo '81b40f75178190efc7048342f896f481eff7c22ee0e83a38c9e6f21d233ee795  /tmp/SPARK-50992-v7.patch' | sha256sum -c -
-          echo '51ac1cd829c2d6bfe0f3882f0c1deb5e4a344489f6ad6ba3be07075d9db8a6b2  .spark50992/writer-fix.patch' | sha256sum -c -
+          echo '9304772907b17d6ed82b3d387e7f96d97f773b44b64f06ad0f11d7af761a67d4  .spark50992/writer-fix.patch' | sha256sum -c -
           git apply --check /tmp/SPARK-50992-v7.patch
           git apply /tmp/SPARK-50992-v7.patch
           git apply --check .spark50992/writer-fix.patch
