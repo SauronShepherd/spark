@@ -17,7 +17,7 @@ diff --git a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecuti
 +
 +    mode match {
 +      case SimpleMode =>
-+        queryExecution.simpleStringUnbounded(formatted = false, maxFields, append)
++        queryExecution.simpleStringUnbounded(false, maxFields, append)
 +      case ExtendedMode =>
 +        queryExecution.writePlansUnbounded(append, maxFields)
 +      case CodegenMode =>
@@ -29,7 +29,7 @@ diff --git a/sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecuti
 +      case CostMode =>
 +        queryExecution.stringWithStatsUnbounded(maxFields, append)
 +      case FormattedMode =>
-+        queryExecution.simpleStringUnbounded(formatted = true, maxFields, append)
++        queryExecution.simpleStringUnbounded(true, maxFields, append)
 +    }
 +  }
 +
