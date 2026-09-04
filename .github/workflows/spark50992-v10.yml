@@ -92,7 +92,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
-          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.ExplainSuite" 2>&1 | tee /tmp/explain.log
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.ExplainSuite" 2>&1 | tee /tmp/explain.log
 
       - name: ExplainUtilsSuite
         shell: bash
