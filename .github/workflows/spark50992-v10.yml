@@ -1,0 +1,124 @@
+name: SPARK-50992 exact v10 validation
+
+on:
+  push:
+    branches:
+      - SPARK-50992-ci-validation-v10
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Reconstruct and verify exact v10 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED=d92ead4dcd1cf784c7cde5a78fa2b9b28098305cf26ab11246487623ee76968e
+          test "$(wc -c < .ci/SPARK-50992/v10/00)" -eq 700
+          echo 'd8fc7a734c48a5fc1b90f018179ecf5d7f4d8a1d83bd3acf2f296fefc6a5b3c5  .ci/SPARK-50992/v10/00' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/01)" -eq 700
+          echo 'e3c8565cdc04fb16cefd01f51e2511ee4e249ffa9ec92a0049450b5cffac5bee  .ci/SPARK-50992/v10/01' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/02)" -eq 700
+          echo 'c2bc7d30012d3cc43b6f9bf7870bb255e5f6b020dde57e9eeb3b5e74f1dfb8b2  .ci/SPARK-50992/v10/02' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/03)" -eq 700
+          echo 'faabe925b71f94fc24d805ec6ac758ab33293c01dac9725ae83478278a2c3c2d  .ci/SPARK-50992/v10/03' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/04)" -eq 700
+          echo '3608a7440105331031e3ce37347875c9b209175830ebe51db8d219ec13a1ef35  .ci/SPARK-50992/v10/04' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/05)" -eq 700
+          echo '09eadafdb666da7240b9c0da9906e0d1bd9087808f4be228fd57e2c88b6c3440  .ci/SPARK-50992/v10/05' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/06)" -eq 700
+          echo '5b561172fac87f56318d2ddd89fba9ef0eb9524ac75aa3da0072461059d8f88a  .ci/SPARK-50992/v10/06' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/07)" -eq 700
+          echo '14611262f71558c68e159b004b222e5f20d0e5b9db3cdd197812b1e74dc6cd35  .ci/SPARK-50992/v10/07' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/08)" -eq 700
+          echo '3da2e5effa27822e5d8c35672f6620f7a066fd0e9835b35d995f5782df4f7458  .ci/SPARK-50992/v10/08' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/09)" -eq 700
+          echo 'b437f5b6fabe0916800c06152168ae5c1bed684e9c01b89c5405d28764dd8fae  .ci/SPARK-50992/v10/09' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/10)" -eq 700
+          echo 'dc1a20dd392d7be200cea68396e312e7d90c6c07d7d22f948f927be75c8e814e  .ci/SPARK-50992/v10/10' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/11)" -eq 700
+          echo '6ebbdec7ac2202a0fadd49c428dd458d38783821f5fda9e34ab2a460d8095d65  .ci/SPARK-50992/v10/11' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v10/12)" -eq 652
+          echo 'c07d84918289d16c46aa273e966cada9af107ffcf273ef59ca170af2cf1f651a  .ci/SPARK-50992/v10/12' | sha256sum -c -
+          cat .ci/SPARK-50992/v10/00 .ci/SPARK-50992/v10/01 .ci/SPARK-50992/v10/02 .ci/SPARK-50992/v10/03 .ci/SPARK-50992/v10/04 .ci/SPARK-50992/v10/05 .ci/SPARK-50992/v10/06 .ci/SPARK-50992/v10/07 .ci/SPARK-50992/v10/08 .ci/SPARK-50992/v10/09 .ci/SPARK-50992/v10/10 .ci/SPARK-50992/v10/11 .ci/SPARK-50992/v10/12 | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v10.patch
+          ACTUAL=$(sha256sum /tmp/SPARK-50992-early-exit-v10.patch | awk '{print $1}')
+          echo "v10 sha256=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+          git apply --check /tmp/SPARK-50992-early-exit-v10.patch
+          git apply /tmp/SPARK-50992-early-exit-v10.patch
+          git diff --check
+          test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
+          test "$(grep -c 'val append = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala || true)" -eq 0
+          grep -n '<scala.version>2.13.18</scala.version>' pom.xml
+
+      - name: Compile Catalyst and SQL tests
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/Test/compile" "sql/Test/compile" 2>&1 | tee /tmp/compile.log
+
+      - name: StringUtilsSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/testOnly org.apache.spark.sql.catalyst.util.StringUtilsSuite" 2>&1 | tee /tmp/stringutils.log
+
+      - name: TreeNodeSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/testOnly org.apache.spark.sql.catalyst.trees.TreeNodeSuite" 2>&1 | tee /tmp/treenode.log
+
+      - name: QueryExecutionSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite" 2>&1 | tee /tmp/queryexecution.log
+
+      - name: ExplainSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.ExplainSuite" 2>&1 | tee /tmp/explain.log
+
+      - name: ExplainUtilsSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.ExplainUtilsSuite" 2>&1 | tee /tmp/explainutils.log
+
+      - name: Scala lint
+        shell: bash
+        run: |
+          set -o pipefail
+          ./dev/lint-scala 2>&1 | tee /tmp/lint.log
+
+      - name: Upload validation logs and exact patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark50992-v10-validation
+          if-no-files-found: warn
+          path: |
+            /tmp/SPARK-50992-early-exit-v10.patch
+            /tmp/compile.log
+            /tmp/stringutils.log
+            /tmp/treenode.log
+            /tmp/queryexecution.log
+            /tmp/explain.log
+            /tmp/explainutils.log
+            /tmp/lint.log
+          retention-days: 7
