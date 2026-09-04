@@ -21,7 +21,6 @@ import org.apache.spark.sql.{DataFrame, SaveMode, SQLContext}
 import org.apache.spark.sql.errors.QueryCompilationErrors
 import org.apache.spark.sql.execution.datasources.jdbc.JdbcUtils._
 import org.apache.spark.sql.execution.metric.SQLMetrics
-import org.apache.spark.sql.jdbc.JdbcDialects
 import org.apache.spark.sql.sources.{BaseRelation, CreatableRelationProvider, DataSourceRegister, RelationProvider}
 
 class JdbcRelationProvider extends CreatableRelationProvider
@@ -56,28 +55,24 @@ class JdbcRelationProvider extends CreatableRelationProvider
       df: DataFrame): BaseRelation = {
     val options = new JdbcOptionsInWrite(parameters)
     val isCaseSensitive = sqlContext.sparkSession.sessionState.conf.caseSensitiveAnalysis
-    val dialect = JdbcDialects.get(options.url)
-    val conn = dialect.createConnectionFactory(options)(-1)
-    try {
+    val (tableExists, tableSchema) = JdbcUtils.withConnection(options) { conn =>
       val tableExists = JdbcUtils.tableExists(conn, options)
-      if (tableExists) {
+      val tableSchema = if (tableExists) {
         mode match {
           case SaveMode.Overwrite =>
             if (options.isTruncate && isCascadingTruncateTable(options.url) == Some(false)) {
               // In this case, we should truncate table and then load.
               truncateTable(conn, options)
-              val tableSchema = JdbcUtils.getSchemaOption(conn, options)
-              saveTable(df, tableSchema, isCaseSensitive, options)
+              JdbcUtils.getSchemaOption(conn, options)
             } else {
               // Otherwise, do not truncate the table, instead drop and recreate it
               dropTable(conn, options.table, options)
               createTable(conn, options.table, df.schema, isCaseSensitive, options)
-              saveTable(df, Some(df.schema), isCaseSensitive, options)
+              Some(df.schema)
             }
 
           case SaveMode.Append =>
-            val tableSchema = JdbcUtils.getSchemaOption(conn, options)
-            saveTable(df, tableSchema, isCaseSensitive, options)
+            JdbcUtils.getSchemaOption(conn, options)
 
           case SaveMode.ErrorIfExists =>
             throw QueryCompilationErrors.tableOrViewAlreadyExistsError(options.table)
@@ -86,13 +81,17 @@ class JdbcRelationProvider extends CreatableRelationProvider
             // With `SaveMode.Ignore` mode, if table already exists, the save operation is expected
             // to not save the contents of the DataFrame and to not change the existing data.
             // Therefore, it is okay to do nothing here and then just return the relation below.
+            None
         }
       } else {
         createTable(conn, options.table, df.schema, isCaseSensitive, options)
-        saveTable(df, Some(df.schema), isCaseSensitive, options)
+        Some(df.schema)
       }
-    } finally {
-      conn.close()
+      (tableExists, tableSchema)
+    }
+
+    if (!tableExists || mode != SaveMode.Ignore) {
+      saveTable(df, tableSchema, isCaseSensitive, options)
     }
 
     createRelation(sqlContext, parameters)
