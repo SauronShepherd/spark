@@ -1,0 +1,97 @@
+name: SPARK-50992 exact v12 validation
+
+on:
+  push:
+    branches:
+      - SPARK-50992-ci-validation-v12
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Reconstruct and verify exact v12 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/SPARK-50992/v12/{00,01,02,03,04,05,06,07,08,09,10,11,12,13} \
+            | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v12.patch
+          echo '290c996a31090d41e9a40cff052ea2dd20e3ade356d755975e284c8bea093dff  /tmp/SPARK-50992-early-exit-v12.patch' | sha256sum -c -
+          git apply --check /tmp/SPARK-50992-early-exit-v12.patch
+          git apply /tmp/SPARK-50992-early-exit-v12.patch
+          git diff --check
+          ! git diff --name-only | grep -q '^sql/connect/'
+          ! grep -q 'simpleStringBounded\|explainStringBounded\|writePlansBounded\|toStringBounded\|stringWithStatsBounded' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala
+          grep -q 'Subject: \[PATCH\] \[SPARK-50992\]\[SQL\]' /tmp/SPARK-50992-early-exit-v12.patch
+          grep -n '<scala.version>2.13.18</scala.version>' pom.xml
+
+      - name: Compile Catalyst and SQL tests
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/Test/compile" "sql/Test/compile" 2>&1 | tee /tmp/compile.log
+
+      - name: StringUtilsSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/testOnly org.apache.spark.sql.catalyst.util.StringUtilsSuite" 2>&1 | tee /tmp/stringutils.log
+
+      - name: TreeNodeSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/testOnly org.apache.spark.sql.catalyst.trees.TreeNodeSuite" 2>&1 | tee /tmp/treenode.log
+
+      - name: QueryExecutionSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite" 2>&1 | tee /tmp/queryexecution.log
+
+      - name: ExplainSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.ExplainSuite" 2>&1 | tee /tmp/explain.log
+
+      - name: ExplainUtilsSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.ExplainUtilsSuite" 2>&1 | tee /tmp/explainutils.log
+
+      - name: Scala lint
+        shell: bash
+        run: |
+          set -o pipefail
+          ./dev/lint-scala 2>&1 | tee /tmp/lint.log
+
+      - name: Upload validation logs and exact patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark50992-v12-validation
+          if-no-files-found: warn
+          path: |
+            /tmp/SPARK-50992-early-exit-v12.patch
+            /tmp/compile.log
+            /tmp/stringutils.log
+            /tmp/treenode.log
+            /tmp/queryexecution.log
+            /tmp/explain.log
+            /tmp/explainutils.log
+            /tmp/lint.log
+          retention-days: 7
