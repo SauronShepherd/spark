@@ -29,6 +29,7 @@ import org.apache.spark.sql.test.SharedSparkSession
 import org.apache.spark.util.Utils
 
 class JdbcDriverConnectionSuite extends SharedSparkSession {
+  import testImplicits._
 
   test("SPARK-51264: close driver connection before starting JDBC write") {
     val url = "jdbc:h2:mem:spark51264;DB_CLOSE_DELAY=-1"
