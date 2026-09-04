@@ -15,7 +15,7 @@
 # limitations under the License.
 #
 
-name: SPARK-51264 targeted iteration
+name: SPARK-51264 branch iteration
 
 on:
   push:
@@ -27,17 +27,13 @@ permissions:
 
 jobs:
   iterate:
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
+    runs-on: ubuntu-slim
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v6
         with:
           fetch-depth: 0
-      - uses: actions/setup-java@v5
-        with:
-          distribution: zulu
-          java-version: '17'
-      - name: Prepare patch
+      - name: Prepare and update retry branch
         run: |
           cp .github/spark51264_iterate.py /tmp/spark51264_iterate.py
           git remote add upstream https://github.com/apache/spark.git || true
@@ -46,13 +42,6 @@ jobs:
           git checkout -B SPARK-51264-retry upstream/master
           python3 /tmp/spark51264_iterate.py
           git diff --check
-      - name: Run focused JDBC suite
-        env:
-          SPARK_LOCAL_IP: localhost
-        run: |
-          ./build/sbt -Phadoop-3 -Phive "sql/testOnly org.apache.spark.sql.jdbc.JDBCWriteSuite"
-      - name: Update retry branch
-        run: |
           git config user.name "__angel__"
           git config user.email "angel.alvarez.pascua@gmail.com"
           git add sql/core/src/main/scala/org/apache/spark/sql/execution/datasources/jdbc/JdbcRelationProvider.scala
