@@ -29,15 +29,18 @@ jobs:
           EXPECTED=e3545b84ca4924b495b6ba31e7cbc3f2b2103dfdf9080b7bb76cbbd195480394
           test "$(wc -c < .ci/SPARK-50992/v8.patch.gz.b64.00)" -eq 3500
           test "$(wc -c < .ci/SPARK-50992/v8.patch.gz.b64.01a)" -eq 1750
-          test "$(wc -c < .ci/SPARK-50992/v8.patch.gz.b64.01b)" -eq 1750
+          test "$(wc -c < .ci/SPARK-50992/v8.patch.gz.b64.01b0)" -eq 875
+          test "$(wc -c < .ci/SPARK-50992/v8.patch.gz.b64.01b1)" -eq 875
           test "$(wc -c < .ci/SPARK-50992/v8.patch.gz.b64.02)" -eq 2092
           echo '314d738d8973ae531afc6ff2c6d787157ed3586af90e4a35dbef94c12af7eb2d  .ci/SPARK-50992/v8.patch.gz.b64.00' | sha256sum -c -
           echo '205fd2c7f7d1aa7734ff3e8a4ea35dc6243a1cb68fbaf051346fdf11eeed6b04  .ci/SPARK-50992/v8.patch.gz.b64.01a' | sha256sum -c -
-          echo 'ec992b0a02877a660026d0a598b2b660103c74cecabfcd92461bd853cbbc1c68  .ci/SPARK-50992/v8.patch.gz.b64.01b' | sha256sum -c -
+          echo '1a2dcb1db15311fd07f1d04ab297c0686fd05d254c1262179c977a063d83b0da  .ci/SPARK-50992/v8.patch.gz.b64.01b0' | sha256sum -c -
+          echo '1bae9dab2a8ab17a0369c5623f681640b732b01c64e404f341eda8fd1b1bfbd5  .ci/SPARK-50992/v8.patch.gz.b64.01b1' | sha256sum -c -
           echo '1215ac3615812c9ab487d20fa93001df8bf2070877dcb925266e851608f8d141  .ci/SPARK-50992/v8.patch.gz.b64.02' | sha256sum -c -
           cat .ci/SPARK-50992/v8.patch.gz.b64.00 \
               .ci/SPARK-50992/v8.patch.gz.b64.01a \
-              .ci/SPARK-50992/v8.patch.gz.b64.01b \
+              .ci/SPARK-50992/v8.patch.gz.b64.01b0 \
+              .ci/SPARK-50992/v8.patch.gz.b64.01b1 \
               .ci/SPARK-50992/v8.patch.gz.b64.02 \
             | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v8.patch
           ACTUAL=$(sha256sum /tmp/SPARK-50992-early-exit-v8.patch | awk '{print $1}')
