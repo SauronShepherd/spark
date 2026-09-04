@@ -26,71 +26,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cat .ci/SPARK-50992/v11/base/{00,01,02,03,04,05,06,07,08,09,10,11,12} \
-            | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v10.patch
-          echo 'd92ead4dcd1cf784c7cde5a78fa2b9b28098305cf26ab11246487623ee76968e  /tmp/SPARK-50992-early-exit-v10.patch' | sha256sum -c -
-          python3 - <<'PY'
-          from pathlib import Path
-          src = Path('/tmp/SPARK-50992-early-exit-v10.patch')
-          out = Path('/tmp/SPARK-50992-early-exit-v11.patch')
-          s = src.read_text()
-          s = s.replace(
-              '* Added `QueryExecutionSuite` coverage proving that a zero output limit does not\n'
-              '  skip physical planning for simple or extended explain paths.\n'
-              '* Existing SPARK-31916 direct-append tests continue to require the exact\n'
-              '  truncation count.\n',
-              '* Added `QueryExecutionSuite` coverage proving that a zero output limit does not\n'
-              '  skip analysis or physical planning for simple or extended explain paths.\n'
-              '* Added Spark Connect server coverage proving that bounded explain modes respect\n'
-              '  `spark.sql.maxPlanStringLength`.\n'
-              '* Existing SPARK-31916 direct-append tests continue to require the exact\n'
-              '  truncation count.\n')
-          marker = '-- \n2.43.0\n'
-          assert s.endswith(marker)
-          s = s[:-len(marker)]
-          s += '''diff --git a/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala b/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala
-          --- a/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala
-          +++ b/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala
-          @@ -161,8 +161,36 @@ class SparkConnectServiceSuite
-                 assert(response6.hasInputFiles)
-                 assert(response6.getInputFiles.getFilesCount === 0)
-               }
-             }
-           
-          +  test("Spark Connect explain respects maxPlanStringLength") {
-          +    val connect = new MockRemoteSession()
-          +    val plan = proto.Plan.newBuilder().setRoot(connect.sql("SELECT 1")).build()
-          +    val handler = new SparkConnectAnalyzeHandler(null)
-          +    val modes = Seq(
-          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_SIMPLE,
-          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_EXTENDED,
-          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_COST,
-          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_FORMATTED)
-          +
-          +    withSQLConf("spark.sql.maxPlanStringLength" -> "0") {
-          +      modes.foreach { mode =>
-          +        val request = proto.AnalyzePlanRequest
-          +          .newBuilder()
-          +          .setExplain(
-          +            proto.AnalyzePlanRequest.Explain
-          +              .newBuilder()
-          +              .setPlan(plan)
-          +              .setExplainMode(mode)
-          +              .build())
-          +          .build()
-          +        val response = handler.process(request, sparkSessionHolder)
-          +        assert(response.hasExplain)
-          +        assert(response.getExplain.getExplainString === "Truncated plan of unknown length")
-          +      }
-          +    }
-          +  }
-          +
-             test("SPARK-41224: collect data using arrow") {
-               withEvents { verifyEvents =>
-                 val instance = new SparkConnectService(false)
-          ''' + marker
-          out.write_text(s)
-          PY
+          for i in $(seq -w 0 12); do test "$(wc -c < .ci/SPARK-50992/v11/$i)" -eq 700; done
+          test "$(wc -c < .ci/SPARK-50992/v11/13)" -eq 552
+          cat .ci/SPARK-50992/v11/{00,01,02,03,04,05,06,07,08,09,10,11,12,13} \
+            | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v11.patch
           echo '032652203d105b19570706a26cd2f1d6a3a43f68bac308ac20f2bfccdf9bb81d  /tmp/SPARK-50992-early-exit-v11.patch' | sha256sum -c -
           git apply --check /tmp/SPARK-50992-early-exit-v11.patch
           git apply /tmp/SPARK-50992-early-exit-v11.patch
