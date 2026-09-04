@@ -87,7 +87,8 @@ suite = Path("sql/core/src/test/scala/org/apache/spark/sql/jdbc/JDBCWriteSuite.s
 text = suite.read_text()
 text = text.replace(
     "import java.sql.{Date, DriverManager, Timestamp}\n",
-    "import java.lang.reflect.{InvocationTargetException, Proxy}\nimport java.sql.{Connection, Date, DriverManager, Timestamp}\n")
+    "import java.lang.reflect.{InvocationHandler, InvocationTargetException, Method, Proxy}\n"
+    "import java.sql.{Connection, Date, DriverManager, Timestamp}\n")
 text = text.replace(
     "import org.apache.spark.SparkException\n",
     "import org.apache.spark.{SparkException, TaskContext}\n")
@@ -108,10 +109,8 @@ companion = '''object JDBCWriteSuite {
         DriverManager.getConnection(options.url)
       } else {
         val connection = DriverManager.getConnection(options.url)
-        Proxy.newProxyInstance(
-          connection.getClass.getClassLoader,
-          Array(classOf[Connection]),
-          (_, method, args) => {
+        val handler = new InvocationHandler {
+          override def invoke(proxy: Any, method: Method, args: Array[AnyRef]): AnyRef = {
             val methodArgs = if (args == null) Array.empty[AnyRef] else args
             try {
               val result = method.invoke(connection, methodArgs: _*)
@@ -122,7 +121,12 @@ companion = '''object JDBCWriteSuite {
             } catch {
               case e: InvocationTargetException => throw e.getCause
             }
-          }).asInstanceOf[Connection]
+          }
+        }
+        Proxy.newProxyInstance(
+          connection.getClass.getClassLoader,
+          Array(classOf[Connection]),
+          handler).asInstanceOf[Connection]
       }
     }
   }
@@ -137,11 +141,25 @@ test_marker = '  test("createTableOptions") {\n'
 regression_test = '''  test("SPARK-51264: close driver connection before starting JDBC write") {
     val trackingDialect = JDBCWriteSuite.trackingDialect(url)
     val df = spark.createDataFrame(sparkContext.parallelize(arr1x2), schema2)
+    val tables = Seq(
+      "TEST.SPARK51264_APPEND",
+      "TEST.SPARK51264_TRUNCATE",
+      "TEST.SPARK51264_OVERWRITE",
+      "TEST.SPARK51264_CREATE")
 
-    def resetTable(table: String): Unit = {
+    def dropTable(table: String): Unit = {
       val statement = conn.createStatement()
       try {
         statement.executeUpdate(s"DROP TABLE IF EXISTS $table")
+      } finally {
+        statement.close()
+      }
+    }
+
+    def resetTable(table: String): Unit = {
+      dropTable(table)
+      val statement = conn.createStatement()
+      try {
         statement.executeUpdate(s"CREATE TABLE $table (name TEXT(32), id INTEGER)")
       } finally {
         statement.close()
@@ -161,30 +179,20 @@ regression_test = '''  test("SPARK-51264: close driver connection before startin
     JdbcDialects.unregisterDialect(H2Dialect())
     JdbcDialects.registerDialect(trackingDialect)
     try {
-      resetTable("TEST.SPARK51264_APPEND")
-      writeAndCheck("TEST.SPARK51264_APPEND", SaveMode.Append)
+      resetTable(tables(0))
+      writeAndCheck(tables(0), SaveMode.Append)
 
-      resetTable("TEST.SPARK51264_TRUNCATE")
-      writeAndCheck("TEST.SPARK51264_TRUNCATE", SaveMode.Overwrite, truncate = true)
+      resetTable(tables(1))
+      writeAndCheck(tables(1), SaveMode.Overwrite, truncate = true)
 
-      resetTable("TEST.SPARK51264_OVERWRITE")
-      writeAndCheck("TEST.SPARK51264_OVERWRITE", SaveMode.Overwrite)
+      resetTable(tables(2))
+      writeAndCheck(tables(2), SaveMode.Overwrite)
 
-      val statement = conn.createStatement()
-      try {
-        statement.executeUpdate("DROP TABLE IF EXISTS TEST.SPARK51264_CREATE")
-      } finally {
-        statement.close()
-      }
-      writeAndCheck("TEST.SPARK51264_CREATE", SaveMode.Append)
+      dropTable(tables(3))
+      writeAndCheck(tables(3), SaveMode.Append)
     } finally {
       try {
-        val statement = conn.createStatement()
-        try {
-          statement.executeUpdate("DROP ALL OBJECTS")
-        } finally {
-          statement.close()
-        }
+        tables.foreach(dropTable)
       } finally {
         JDBCWriteSuite.driverConnectionClosed = false
         JdbcDialects.unregisterDialect(trackingDialect)
