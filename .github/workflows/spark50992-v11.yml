@@ -1,0 +1,166 @@
+name: SPARK-50992 exact v11 Connect validation
+
+on:
+  push:
+    branches:
+      - SPARK-50992-ci-validation-v11
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Reconstruct and verify exact v11 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          cat .ci/SPARK-50992/v11/base/{00,01,02,03,04,05,06,07,08,09,10,11,12} \
+            | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v10.patch
+          echo 'd92ead4dcd1cf784c7cde5a78fa2b9b28098305cf26ab11246487623ee76968e  /tmp/SPARK-50992-early-exit-v10.patch' | sha256sum -c -
+          python3 - <<'PY'
+          from pathlib import Path
+          src = Path('/tmp/SPARK-50992-early-exit-v10.patch')
+          out = Path('/tmp/SPARK-50992-early-exit-v11.patch')
+          s = src.read_text()
+          s = s.replace(
+              '* Added `QueryExecutionSuite` coverage proving that a zero output limit does not\n'
+              '  skip physical planning for simple or extended explain paths.\n'
+              '* Existing SPARK-31916 direct-append tests continue to require the exact\n'
+              '  truncation count.\n',
+              '* Added `QueryExecutionSuite` coverage proving that a zero output limit does not\n'
+              '  skip analysis or physical planning for simple or extended explain paths.\n'
+              '* Added Spark Connect server coverage proving that bounded explain modes respect\n'
+              '  `spark.sql.maxPlanStringLength`.\n'
+              '* Existing SPARK-31916 direct-append tests continue to require the exact\n'
+              '  truncation count.\n')
+          marker = '-- \n2.43.0\n'
+          assert s.endswith(marker)
+          s = s[:-len(marker)]
+          s += '''diff --git a/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala b/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala
+          --- a/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala
+          +++ b/sql/connect/server/src/test/scala/org/apache/spark/sql/connect/planner/SparkConnectServiceSuite.scala
+          @@ -161,8 +161,36 @@ class SparkConnectServiceSuite
+                 assert(response6.hasInputFiles)
+                 assert(response6.getInputFiles.getFilesCount === 0)
+               }
+             }
+           
+          +  test("Spark Connect explain respects maxPlanStringLength") {
+          +    val connect = new MockRemoteSession()
+          +    val plan = proto.Plan.newBuilder().setRoot(connect.sql("SELECT 1")).build()
+          +    val handler = new SparkConnectAnalyzeHandler(null)
+          +    val modes = Seq(
+          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_SIMPLE,
+          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_EXTENDED,
+          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_COST,
+          +      proto.AnalyzePlanRequest.Explain.ExplainMode.EXPLAIN_MODE_FORMATTED)
+          +
+          +    withSQLConf("spark.sql.maxPlanStringLength" -> "0") {
+          +      modes.foreach { mode =>
+          +        val request = proto.AnalyzePlanRequest
+          +          .newBuilder()
+          +          .setExplain(
+          +            proto.AnalyzePlanRequest.Explain
+          +              .newBuilder()
+          +              .setPlan(plan)
+          +              .setExplainMode(mode)
+          +              .build())
+          +          .build()
+          +        val response = handler.process(request, sparkSessionHolder)
+          +        assert(response.hasExplain)
+          +        assert(response.getExplain.getExplainString === "Truncated plan of unknown length")
+          +      }
+          +    }
+          +  }
+          +
+             test("SPARK-41224: collect data using arrow") {
+               withEvents { verifyEvents =>
+                 val instance = new SparkConnectService(false)
+          ''' + marker
+          out.write_text(s)
+          PY
+          echo '032652203d105b19570706a26cd2f1d6a3a43f68bac308ac20f2bfccdf9bb81d  /tmp/SPARK-50992-early-exit-v11.patch' | sha256sum -c -
+          git apply --check /tmp/SPARK-50992-early-exit-v11.patch
+          git apply /tmp/SPARK-50992-early-exit-v11.patch
+          git diff --check
+          test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
+          test "$(grep -c 'val append = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala || true)" -eq 0
+          grep -n '<scala.version>2.13.18</scala.version>' pom.xml
+
+      - name: Compile Catalyst, SQL, and Connect tests
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/Test/compile" "sql/Test/compile" "connect/Test/compile" 2>&1 | tee /tmp/compile.log
+
+      - name: StringUtilsSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/testOnly org.apache.spark.sql.catalyst.util.StringUtilsSuite" 2>&1 | tee /tmp/stringutils.log
+
+      - name: TreeNodeSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/testOnly org.apache.spark.sql.catalyst.trees.TreeNodeSuite" 2>&1 | tee /tmp/treenode.log
+
+      - name: QueryExecutionSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite" 2>&1 | tee /tmp/queryexecution.log
+
+      - name: ExplainSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.ExplainSuite" 2>&1 | tee /tmp/explain.log
+
+      - name: ExplainUtilsSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "sql/testOnly org.apache.spark.sql.execution.ExplainUtilsSuite" 2>&1 | tee /tmp/explainutils.log
+
+      - name: SparkConnectServiceSuite
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "connect/testOnly org.apache.spark.sql.connect.planner.SparkConnectServiceSuite" 2>&1 | tee /tmp/connect.log
+
+      - name: Scala lint
+        shell: bash
+        run: |
+          set -o pipefail
+          ./dev/lint-scala 2>&1 | tee /tmp/lint.log
+
+      - name: Upload validation logs and exact patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark50992-v11-validation
+          if-no-files-found: warn
+          path: |
+            /tmp/SPARK-50992-early-exit-v11.patch
+            /tmp/compile.log
+            /tmp/stringutils.log
+            /tmp/treenode.log
+            /tmp/queryexecution.log
+            /tmp/explain.log
+            /tmp/explainutils.log
+            /tmp/connect.log
+            /tmp/lint.log
+          retention-days: 7
