@@ -1,0 +1,102 @@
+name: SPARK-50992 exact v9 validation
+
+on:
+  push:
+    branches:
+      - SPARK-50992-ci-validation-v9
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Reconstruct and verify exact v9 patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          EXPECTED=0c0ecc814b36816942605928824d6fd69721c54ed9532a2e146fcb307fe439be
+          test "$(wc -c < .ci/SPARK-50992/v9/00)" -eq 700
+          echo 'd8a56dd42b78dd052d63fc7a003dc9d44a50bf9f796f9a1924b9a19a2c3bf31e  .ci/SPARK-50992/v9/00' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/01)" -eq 700
+          echo '3dfd87f174362cf78ac4a14633c8d4cb4b3633e97224ced94fc9879cf3bacb92  .ci/SPARK-50992/v9/01' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/02)" -eq 700
+          echo '081dbab34075dc8b18f8f5fd189e70458fc62ceb6cf4068473a67bd2cd616984  .ci/SPARK-50992/v9/02' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/03)" -eq 700
+          echo '1bafe4dcbb2f9faaaa59275097b2d2601174ceb7b79aec205389e0feb71a5f3c  .ci/SPARK-50992/v9/03' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/04)" -eq 700
+          echo 'ab96f4feb01bbcd6bfc3e491b0ae03b39a99d3b39f6df15a058cb0f0b5313112  .ci/SPARK-50992/v9/04' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/05)" -eq 700
+          echo '2c524db0f2cc845c9e610718227a7d380237910992ff2afad6905f29e8da5325  .ci/SPARK-50992/v9/05' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/06)" -eq 700
+          echo 'b5c07bb77664b9c2e513eb82ed1dda3eff485158d3b41a9b0e7609953a04bc42  .ci/SPARK-50992/v9/06' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/07)" -eq 700
+          echo 'ed661047c26798f642adcb76b7a03bca5166b4aabe0077f86fdd33553e2c7848  .ci/SPARK-50992/v9/07' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/08)" -eq 700
+          echo '69cb6430a89e24e815e650d9b4fe1fc1cb4047caef04f1817d1950e42901b89f  .ci/SPARK-50992/v9/08' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/09)" -eq 700
+          echo '5c0ef4dc378bb502179d99e05b025643883a8444934faa8b73e6aff2477125bc  .ci/SPARK-50992/v9/09' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/10)" -eq 700
+          echo '8d0f43e599ea6793b6b1d918f2a7fe91d5ffad19c071a3eab052c3d050e47e4e  .ci/SPARK-50992/v9/10' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/11)" -eq 700
+          echo 'e681654a4a382ec75e544a30a50d65042ed59f729d0672aeb8b5300d80e622d2  .ci/SPARK-50992/v9/11' | sha256sum -c -
+          test "$(wc -c < .ci/SPARK-50992/v9/12)" -eq 648
+          echo 'a469a8de9321b1d2a51fb3d77110293d4870a5172f0a4727f57b89434e515605  .ci/SPARK-50992/v9/12' | sha256sum -c -
+          cat .ci/SPARK-50992/v9/00 .ci/SPARK-50992/v9/01 .ci/SPARK-50992/v9/02 .ci/SPARK-50992/v9/03 .ci/SPARK-50992/v9/04 .ci/SPARK-50992/v9/05 .ci/SPARK-50992/v9/06 .ci/SPARK-50992/v9/07 .ci/SPARK-50992/v9/08 .ci/SPARK-50992/v9/09 .ci/SPARK-50992/v9/10 .ci/SPARK-50992/v9/11 .ci/SPARK-50992/v9/12 | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v9.patch
+          ACTUAL=$(sha256sum /tmp/SPARK-50992-early-exit-v9.patch | awk '{print $1}')
+          echo "v9 sha256=$ACTUAL"
+          test "$ACTUAL" = "$EXPECTED"
+          git apply --check /tmp/SPARK-50992-early-exit-v9.patch
+          git apply /tmp/SPARK-50992-early-exit-v9.patch
+          git diff --check
+          test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
+          test "$(grep -c 'val append = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala || true)" -eq 0
+          grep -n '<scala.version>2.13.18</scala.version>' pom.xml
+
+      - name: Compile Catalyst and SQL tests
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/Test/compile" "sql/Test/compile" 2>&1 | tee /tmp/compile.log
+
+      - name: Run targeted regression suites
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 \
+            "catalyst/testOnly org.apache.spark.sql.catalyst.util.StringUtilsSuite" \
+            "catalyst/testOnly org.apache.spark.sql.catalyst.trees.TreeNodeSuite" \
+            "sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite" \
+            "sql/testOnly org.apache.spark.sql.execution.ExplainSuite" \
+            "sql/testOnly org.apache.spark.sql.execution.ExplainUtilsSuite" \
+            2>&1 | tee /tmp/tests.log
+
+      - name: Scala lint
+        shell: bash
+        run: |
+          set -o pipefail
+          ./dev/lint-scala 2>&1 | tee /tmp/lint.log
+
+      - name: Upload validation logs and exact patch
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: spark50992-v9-validation
+          if-no-files-found: warn
+          path: |
+            /tmp/SPARK-50992-early-exit-v9.patch
+            /tmp/compile.log
+            /tmp/tests.log
+            /tmp/lint.log
+          retention-days: 7
