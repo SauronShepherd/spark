@@ -1,4 +1,4 @@
-name: SPARK-50992 v8 recover exact v7
+name: SPARK-50992 exact v8 validation
 
 on:
   push:
@@ -10,36 +10,70 @@ permissions:
   contents: read
 
 jobs:
-  recover:
+  validate:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Reconstruct exact v7 patch
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Reconstruct and verify exact v8 patch
         shell: bash
         run: |
           set -euo pipefail
-          EXPECTED=81b40f75178190efc7048342f896f481eff7c22ee0e83a38c9e6f21d233ee795
-          git show origin/SPARK-50992-ci-validation-v7:.github/spark50992/gz-00 > /tmp/gz-00
-          git show origin/SPARK-50992-ci-validation-v7:.github/spark50992/gz-01 > /tmp/gz-01
-          git show origin/SPARK-50992-ci-validation-v7:.github/spark50992/gz-02 > /tmp/gz-02
-          cat /tmp/gz-00 /tmp/gz-01 /tmp/gz-02 | gunzip > /tmp/SPARK-50992-early-exit-v7.patch
-          ACTUAL=$(sha256sum /tmp/SPARK-50992-early-exit-v7.patch | awk '{print $1}')
-          echo "v7 sha256=$ACTUAL"
+          EXPECTED=e3545b84ca4924b495b6ba31e7cbc3f2b2103dfdf9080b7bb76cbbd195480394
+          cat .ci/SPARK-50992/v8.patch.gz.b64.00 \
+              .ci/SPARK-50992/v8.patch.gz.b64.01 \
+              .ci/SPARK-50992/v8.patch.gz.b64.02 \
+            | base64 --decode | gunzip > /tmp/SPARK-50992-early-exit-v8.patch
+          ACTUAL=$(sha256sum /tmp/SPARK-50992-early-exit-v8.patch | awk '{print $1}')
+          echo "v8 sha256=$ACTUAL"
           test "$ACTUAL" = "$EXPECTED"
-          git apply --check /tmp/SPARK-50992-early-exit-v7.patch
-          git apply /tmp/SPARK-50992-early-exit-v7.patch
+          git apply --check /tmp/SPARK-50992-early-exit-v8.patch
+          git apply /tmp/SPARK-50992-early-exit-v8.patch
           git diff --check
-          cp sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala /tmp/QueryExecution-v7.scala
+          test "$(grep -c 'val append: String => Unit = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala)" -eq 4
+          test "$(grep -c 'val append = concat.append' sql/core/src/main/scala/org/apache/spark/sql/execution/QueryExecution.scala || true)" -eq 0
+          grep -n '<scala.version>2.13.18</scala.version>' pom.xml
 
-      - name: Upload exact recovery inputs
+      - name: Compile Catalyst and SQL tests
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 "catalyst/Test/compile" "sql/Test/compile" 2>&1 | tee /tmp/compile.log
+
+      - name: Run targeted regression suites
+        shell: bash
+        run: |
+          set -o pipefail
+          ./build/sbt -Phadoop-3 \
+            "catalyst/testOnly org.apache.spark.sql.catalyst.util.StringUtilsSuite" \
+            "catalyst/testOnly org.apache.spark.sql.catalyst.trees.TreeNodeSuite" \
+            "sql/testOnly org.apache.spark.sql.execution.QueryExecutionSuite" \
+            "sql/testOnly org.apache.spark.sql.execution.ExplainSuite" \
+            "sql/testOnly org.apache.spark.sql.execution.ExplainUtilsSuite" \
+            2>&1 | tee /tmp/tests.log
+
+      - name: Scala lint
+        shell: bash
+        run: |
+          set -o pipefail
+          ./dev/lint-scala 2>&1 | tee /tmp/lint.log
+
+      - name: Upload validation logs and exact patch
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: spark50992-v8-recovery
-          if-no-files-found: error
+          name: spark50992-v8-validation
+          if-no-files-found: warn
           path: |
-            /tmp/SPARK-50992-early-exit-v7.patch
-            /tmp/QueryExecution-v7.scala
+            /tmp/SPARK-50992-early-exit-v8.patch
+            /tmp/compile.log
+            /tmp/tests.log
+            /tmp/lint.log
           retention-days: 7
